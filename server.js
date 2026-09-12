@@ -24,7 +24,9 @@ function loadEnvFile(fileName) {
 loadEnvFile('.env.local')
 loadEnvFile('.env')
 const distDir = path.join(__dirname, 'dist')
-const port = Number(process.env.PORT || (process.argv.includes('--dev') ? 8787 : 3000))
+// Cờ --dev phải thắng PORT trong .env: chế độ dev luôn dùng 8787 (tránh đụng cổng 3000 của bản production)
+const isDev = process.argv.includes('--dev')
+const port = Number(isDev ? 8787 : (process.env.PORT || 3000))
 
 function sendJson(res, status, body) {
   const text = JSON.stringify(body)
