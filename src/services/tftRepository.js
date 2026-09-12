@@ -86,8 +86,11 @@ export function createTftRepository(data) {
 
   const getRelatedCompsForTrait = (trait) => {
     if (!trait) return []
+    // traits_string co hau so muc (_1/_2): so khop bang prefix da chuan hoa
+    const key = normalizeId(trait.apiName)
+    if (!key) return []
     return getComps().filter((comp) =>
-      (comp.traits_string || '').split(',').map((id) => id.trim()).some((id) => getTrait(id)?.apiName === trait.apiName),
+      (comp.traits_string || '').split(',').map((id) => normalizeId(id)).some((id) => id === key || id.startsWith(key)),
     )
   }
 

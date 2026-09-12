@@ -10,15 +10,37 @@ const INTENT_RULES = [
   { id: 'trait', keys: ['toc', 'he', 'trait', 'moc', 'kich moc'] },
   { id: 'augment', keys: ['augment', 'nang cap', 'goi y nang cap'] },
   { id: 'economy', keys: ['roll', 'reroll', 'level', 'len cap', 'up cap', 'eco', 'kinh te', 'chuoi thang', 'chuoi thua', 'slow roll', 'fast 8'] },
+  { id: 'comparison', keys: ['so sanh', 'khac nhau', 'manh hon', 'tot hon', 'vs'] },
   { id: 'unit_build', keys: ['carry', 'build', 'danh gia', 'nen danh', 'tuong nao', 'co nen', 'frontline', 'tank'] },
   { id: 'recommendation', keys: ['goi y', 'gợi ý', 'nen choi', 'nên chơi', 'muon choi', 'muốn chơi', 'chua biet', 'chưa biết'] },
 ]
 
+// Từ generic (đại từ/từ chỉ thị/game-speak) — KHÔNG dùng làm token tìm thực thể,
+// tránh fuzzy bắt rác ("meta", "hình", "mạnh"... khớp nhầm tên tướng).
+const STOP_TOKENS = new Set([
+  'meta', 'hien', 'tai', 'nao', 'manh', 'nhat', 'choi', 'cho', 'di', 'len', 'xuong',
+  'tot', 'yeu', 'vao', 'ra', 'nguoi', 'team', 'dau', 'tran', 'ban', 'minh', 'muon',
+  'can', 'phai', 'nen', 'the', 'gi', 'cam', 'dung', 'ghep', 'moc', 'kich', 'hoat',
+  'dat', 'tien', 'vang', 'cap', 'level', 'roll', 'hinh', 'doi', 'toc', 'he',
+  'la', 'va', 'voi', 'khi', 'nhung', 'thi', 'co', 'khong', 'sao', 'nhieu', 'it',
+  'no', 'nay', 'cua', 'do day', 'nho',
+])
+
 const ALIASES = new Map([
+  // tướng — sửa typo
   ['ahry', 'ahri'], ['ahrii', 'ahri'], ['ari', 'ahri'], ['a hri', 'ahri'],
   ['xayahh', 'xayah'], ['camli', 'camille'], ['camile', 'camille'], ['florra', 'fiora'],
-  ['sylass', 'sylas'], ['sôjin', 'shojin'], ['sojin', 'shojin'], ['shojin', 'shojin'],
-  ['vo cuc', 'vo cuc'], ['vô cực', 'vo cuc'], ['gnh', 'gang'], ['gang bao thach', 'gang'],
+  ['sylass', 'sylas'],
+  // item — viết tắt cộng đồng
+  ['bb', 'blue buff'], ['jg', 'jeweled gauntlet'], ['ie', 'infinity edge'],
+  ['gs', 'giant slayer'], ['hoj', 'hand of justice'], ['lw', 'last whisper'],
+  ['rfc', 'rapid firecannon'], ['dc', 'rabadon'], ['shojin', 'shojin'],
+  ['sojin', 'shojin'], ['warmog', 'warmog'], ['red', 'red buff'], ['blue', 'blue buff'],
+  // tên gọi tiếng Việt thông dụng
+  ['nuoc xanh', 'blue buff'], ['nuoc trang', 'blue buff'],
+  ['gang bao thach', 'gargoyle stoneplate'], ['vo cuc', 'guinsoo'],
+  ['kiem vo cuc', 'guinsoo'], ['gang tay ngoc', 'jeweled gauntlet'],
+  ['day chuyen', 'shojin'], ['vo tay', 'shojin'],
 ])
 
 const ANALYZER_CACHE = new WeakMap()
@@ -57,8 +79,13 @@ function getIndexes(data) {
 }
 
 function searchEntity(fuse, rawText, limit) {
-  const normalized = normalizeText(rawText)
-  const terms = [...new Set([normalized, ...tokenize(normalized)])].filter((x) => x.length >= 2)
+  let normalized = normalizeText(rawText)
+  // thay alias dạng cụm (nhiều chữ) trước, rồi mới đến từng token
+  for (const [alias, full] of ALIASES) {
+    if (alias.includes(' ') && normalized.includes(alias)) normalized = normalized.replaceAll(alias, full)
+  }
+  const terms = [...new Set([normalized, ...tokenize(normalized)])]
+    .filter((x) => x.length >= 2 && !STOP_TOKENS.has(x))
   const hits = []
   for (const term of terms) {
     const alias = ALIASES.get(term) || term
@@ -78,11 +105,21 @@ function searchEntity(fuse, rawText, limit) {
 function intentFromQuery(text) {
   const normalized = normalizeText(text)
   if (GREETING_RE.test(normalized)) return 'greeting'
-  for (const rule of INTENT_RULES) if (rule.keys.some((key) => normalized.includes(normalizeText(key)))) return rule.id
+  // Word boundary: 'he'/'toc' không được khớp trong 'ghep'/'warmog' (bug thật đã gặp)
+  for (const rule of INTENT_RULES) {
+    const hit = rule.keys.some((key) => {
+      const k = normalizeText(key)
+      const re = new RegExp('(^|\\s)' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|\\s)')
+      return re.test(normalized)
+    })
+    if (hit) return rule.id
+  }
   return 'general'
 }
 
-export function analyzeQuery(data, message, history = []) {
+import { mergeMemory } from './memory'
+
+export function analyzeQuery(data, message, history = [], memory = null) {
   if (!data) return { intent: 'general', normalized: normalizeText(message), query: message, entities: {} }
   const { repo, units, items, traits, augments } = getIndexes(data)
   const recentUserText = Array.isArray(history)
@@ -103,11 +140,15 @@ export function analyzeQuery(data, message, history = []) {
     const name = normalizeText(value.name)
     return name.length >= 3 && normalized.includes(name)
   })
+  // Khớp mờ CHẮC CHẮN (score thấp): "warmog" -> "Warmogs Armor" vẫn tính là hỏi game
+  const scores = [...found.units, ...found.items, ...found.traits, ...found.augments].map((x) => x.score)
+  const bestScore = scores.length ? Math.min(...scores) : 1
   const mentionsTft = intent !== 'general'
     || namesEntity(found.units) || namesEntity(found.items) || namesEntity(found.traits) || namesEntity(found.augments)
+    || bestScore <= 0.15
     || /tft|set 18|dtcl|dau truong chan ly/.test(normalized)
 
-  return {
+  return mergeMemory({
     intent: mentionsTft ? intent : 'general',
     mentionsTft,
     normalized,
@@ -118,7 +159,7 @@ export function analyzeQuery(data, message, history = []) {
       traits: found.traits.map((x) => ({ name: x.value.name, apiName: x.value.apiName, score: x.score })),
       augments: found.augments.map((x) => ({ name: x.value.name, apiName: x.value.apiName, score: x.score })),
     },
-  }
+  }, memory)
 }
 
 export function resolveUnitNames(repo, analysis) {

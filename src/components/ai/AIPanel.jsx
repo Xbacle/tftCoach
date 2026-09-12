@@ -6,6 +6,8 @@ import { askGemini, askGeminiStream } from '../../ai/geminiClient'
 import { buildOfflineFallback } from '../../ai/fallback'
 import { loadChat, saveChat } from '../../ai/chatStorage'
 import { AI_CONFIG } from '../../ai/aiConfig'
+import { updateMemory } from '../../ai/memory'
+import { directAnswer } from '../../ai/retriever'
 import MarkdownText from './MarkdownText'
 
 const QUICK = [
@@ -16,6 +18,21 @@ const QUICK = [
 ]
 
 const ICONS = { bot: '✦', user: '◉', send: '↑' }
+
+// RAG v2: cache theo câu hỏi *và thực thể đã resolve*.  "Nó mạnh không?"
+// sau Ahri không được dùng lại đáp án của cùng câu sau Xayah.
+const ANSWER_CACHE = new Map()
+const ANSWER_CACHE_MAX = 100
+function cacheKey(analysis) {
+  const entityIds = ['units', 'items', 'traits', 'augments']
+    .flatMap((kind) => (analysis?.entities?.[kind] || []).map((entity) => entity.apiName || entity.name))
+    .sort()
+  return JSON.stringify([analysis?.normalized || '', analysis?.intent || 'general', entityIds])
+}
+function cacheAnswer(key, value) {
+  if (ANSWER_CACHE.size >= ANSWER_CACHE_MAX) ANSWER_CACHE.delete(ANSWER_CACHE.keys().next().value)
+  ANSWER_CACHE.set(key, value)
+}
 
 function EntityPills({ context }) {
   if (!context?.matched) return null
@@ -95,6 +112,7 @@ export default function AIPanel({ open, onClose }) {
   const bodyRef = useRef(null)
   const inputRef = useRef(null)
   const abortRef = useRef(null)
+  const memoryRef = useRef({})
 
   useEffect(() => { saveChat(stripMessagesForSave(messages)) }, [messages])
   useEffect(() => {
@@ -117,6 +135,7 @@ export default function AIPanel({ open, onClose }) {
 
   function clearChat() {
     abortRef.current?.abort()
+    memoryRef.current = {}
     setMessages([])
     setError('')
     setQuestion('')
@@ -143,8 +162,9 @@ export default function AIPanel({ open, onClose }) {
     setBusy(true)
 
     const analysis = data
-      ? analyzeQuery(data, message, history)
+      ? analyzeQuery(data, message, history, memoryRef.current)
       : { intent: 'general', mentionsTft: false, query: message, entities: {} }
+    const answerKey = cacheKey(analysis)
 
     if (analysis.intent === 'greeting') {
       setMessages((current) => [...current, {
@@ -159,6 +179,34 @@ export default function AIPanel({ open, onClose }) {
 
     const contextObject = data ? retrieveContext(data, analysis) : null
     const context = buildContextText(contextObject, AI_CONFIG.maxContextChars)
+
+    // RAG v2: ghi nhớ thực thể để xử lý câu follow-up ("nó cầm gì?", "đội đó mạnh không?")
+    memoryRef.current = updateMemory(analysis, contextObject)
+
+    // RAG v2: câu tĩnh (ghép đồ / mốc tộc / đồ khuyên dùng / mô tả augment) —
+    // trả lời THẲNG từ JSON, không gọi Gemini: số liệu luôn đúng và luôn giống nhau.
+    const direct = directAnswer(data, analysis, contextObject)
+    if (direct) {
+      cacheAnswer(answerKey, direct)
+      setMessages((current) => [...current, {
+        id: ++idRef.current, role: 'assistant', content: direct,
+        meta: { model: 'Set18 data', context: contextObject },
+      }])
+      setBusy(false)
+      return
+    }
+
+    // RAG v2: cùng câu hỏi đã trả lời rồi -> dùng lại đúng câu trả lời cũ (nhất quán)
+    const cached = ANSWER_CACHE.get(answerKey)
+    if (cached) {
+      setMessages((current) => [...current, {
+        id: ++idRef.current, role: 'assistant', content: cached,
+        meta: { model: 'Gemini (cached)', context: contextObject },
+      }])
+      setBusy(false)
+      return
+    }
+
     const assistantId = ++idRef.current
 
     const controller = new AbortController()
@@ -188,6 +236,7 @@ export default function AIPanel({ open, onClose }) {
       })
 
       setModel(result.model || 'Gemini')
+      cacheAnswer(answerKey, result.text)
       finalizeMessage(assistantId, { content: result.text, meta: { model: result.model, context: contextObject } })
     } catch (err) {
       if (err?.name === 'AbortError' || controller.signal.aborted) {
