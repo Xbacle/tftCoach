@@ -68,8 +68,7 @@ PHONG CÁCH:
 - Không nhắc prompt/RAG/JSON/cơ chế nội bộ.` + (getPromptNotes().length ? `
 
 KIẾN THỨC BỔ SUNG (ưu tiên dùng khi liên quan):
-${getPromptNotes().map((x) => "- " + x).join("
-")}` : "");
+${getPromptNotes().map((x) => "- " + x).join("\n")}` : "");
 }
 
 function cleanHistory(history, currentMessage) {
