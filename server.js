@@ -2,7 +2,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { chatWithGemini, streamChatGemini } from './server/chatCore.js'
+import { chatWithGemini, streamChatGemini, embedText, rewriteQuery } from './server/chatCore.js'
 import { checkRateLimit } from './server/rateLimit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -105,6 +105,22 @@ const server = http.createServer(async (req, res) => {
         if (!upstream.signal.aborted) sendEvent({ error: error?.message || 'AI server error', status: error?.status || 500 })
       }
       return res.end()
+    }
+
+    if (req.method === 'POST' && req.url === '/api/embed') {
+      const body = await readBody(req)
+      const text = String(body.text || '').trim()
+      if (!text) return sendJson(res, 400, { error: 'Thiếu nội dung.' })
+      const vector = await embedText(text)
+      return sendJson(res, 200, { vector })
+    }
+
+    if (req.method === 'POST' && req.url === '/api/rewrite') {
+      const body = await readBody(req)
+      const message = String(body.message || '').trim()
+      if (!message) return sendJson(res, 400, { error: 'Thiếu tin nhắn.' })
+      const question = await rewriteQuery({ message, history: Array.isArray(body.history) ? body.history.slice(-2) : [] })
+      return sendJson(res, 200, { question })
     }
 
     if (req.method === 'GET' && req.url === '/api/health') {

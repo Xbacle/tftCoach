@@ -325,6 +325,65 @@ async function runWithRetry({ stream, onDelta, body, signal }) {
   throw lastError || createApiError("Gemini request failed.", 502);
 }
 
+// Lớp 2 — Embed câu hỏi cho vector search
+export async function embedText(text) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key)
+    throw createApiError("Server chưa cấu hình GEMINI_API_KEY (tạo file .env.local — xem .env.example).", 500);
+  const res = await fetch(`${getApiRoot()}/models/gemini-embedding-2:embedContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+    body: JSON.stringify({
+      model: "models/gemini-embedding-2",
+      content: { parts: [{ text: String(text).slice(0, 2000) }] },
+      outputDimensionality: 1536,
+    }),
+  });
+  if (!res.ok)
+    throw createApiError(`Embed API ${res.status}: ${await res.text()}`, res.status);
+  const json = await res.json();
+  return json.embedding.values;
+}
+
+// Mode 2 — Query rewriting: dùng lịch sử viết lại câu teencode/follow-up thành câu chuẩn
+export async function rewriteQuery({ message, history = [] }) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key)
+    throw createApiError("Server chưa cấu hình GEMINI_API_KEY.", 500);
+  const hist = (Array.isArray(history) ? history : [])
+    .slice(-2)
+    .map((m) => `${m.role === "assistant" ? "AI" : "Người dùng"}: ${String(m.content || "").slice(0, 300)}`)
+    .join("\n");
+  const body = JSON.stringify({
+    systemInstruction: {
+      parts: [{
+        text: "Nhiệm vụ: viết lại câu hỏi cuối cùng của người dùng thành MỘT câu hỏi rõ ràng, đầy đủ, dựa trên đoạn hội thoại trước đó. Nếu câu hỏi đã rõ ràng thì giữ nguyên ý. CHỈ trả về câu hỏi đã viết lại, không giải thích.",
+      }],
+    },
+    contents: [{ role: "user", parts: [{ text: (hist ? hist + "\n\n" : "") + "Câu hỏi cần viết lại: " + message }] }],
+    generationConfig: { temperature: 0, maxOutputTokens: 200 },
+  });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const res = await fetch(`${getApiRoot()}/models/gemini-3.6-flash:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body,
+    });
+    if (!res.ok) {
+      if (res.status === 429 || res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+        continue;
+      }
+      break;
+    }
+    const json = await res.json();
+    const text = json?.candidates?.[0]?.content?.parts?.map((p) => p?.text || "").join("").trim();
+    if (text) return text.replace(/^["']|["']$/g, "");
+    break;
+  }
+  return message;
+}
+
 export async function chatWithGemini({
   message,
   context = "",
