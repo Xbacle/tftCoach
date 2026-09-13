@@ -29,10 +29,10 @@ const STOP_TOKENS = new Set([
 
 const ANALYZER_CACHE = new WeakMap()
 
-function buildFuse(items, keys) {
+function buildFuse(items, keys, threshold = 0.4) {
   return new Fuse(items, {
     includeScore: true,
-    threshold: 0.4,
+    threshold,
     ignoreLocation: true,
     minMatchCharLength: 2,
     keys,
@@ -47,7 +47,7 @@ function getIndexes(data) {
     units: buildFuse(repo.getUnits(), [
       { name: 'name', weight: 0.55 }, { name: 'en_name', weight: 0.2 },
       { name: 'apiName', weight: 0.15 }, { name: 'characterName', weight: 0.1 },
-    ]),
+    ], 0.5),
     items: buildFuse(repo.getItems(), [
       { name: 'name', weight: 0.55 }, { name: 'en_name', weight: 0.2 }, { name: 'apiName', weight: 0.25 },
     ]),
@@ -74,7 +74,10 @@ function searchEntity(fuse, rawText, limit, aliasList = []) {
   for (const term of terms) {
     const alias = aliasList.find((a) => a.from === term)?.to || term
     for (const hit of fuse.search(alias).slice(0, limit)) {
-      if ((hit.score ?? 1) <= 0.44) hits.push({ value: hit.item, score: hit.score ?? 1 })
+      // Token dài (>= 5 ký tự = tên riêng gõ sai, vd "casopia") nới lỏng 0.48.
+      // Token ngắn giữ 0.32 — không bắt rác.
+      const threshold = term.length >= 5 ? 0.48 : 0.32
+      if ((hit.score ?? 1) <= threshold) hits.push({ value: hit.item, score: hit.score ?? 1 })
     }
   }
   const merged = new Map()
@@ -134,7 +137,7 @@ export function analyzeQuery(data, message, history = [], memory = null) {
   const mentionsTft = intent !== 'general'
     || Boolean(community)
     || namesEntity(found.units) || namesEntity(found.items) || namesEntity(found.traits) || namesEntity(found.augments)
-    || bestScore <= 0.15
+    || bestScore <= 0.45
     || /tft|set 18|dtcl|dau truong chan ly/.test(normalized)
 
   return mergeMemory({

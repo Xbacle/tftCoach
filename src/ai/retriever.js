@@ -1,5 +1,6 @@
 import { createTftRepository } from '../services/tftRepository'
 import { analyzeQuery, resolveUnitNames } from './analyzer'
+import { getCompIdentity } from '../utils/compNaming'
 import { clampText, normalizeText } from './text'
 
 const REPO_CACHE = new WeakMap()
@@ -60,7 +61,9 @@ function compSummary(repo, comp) {
     || (units[0] && units[0].apiName)
     || null
   return {
-    type: 'comp', id: comp.Cluster, name: comp.name_string || comp.name || `Comp ${comp.Cluster}`,
+    type: 'comp', id: comp.Cluster,
+    name: (getCompIdentity(comp, repo).title) || comp.name_string || `Comp ${comp.Cluster}`,
+    style: (getCompIdentity(comp, repo).style) || null,
     carry, carryName: (carry && repo.getUnit(carry) ? repo.getUnit(carry).name : carry) || null,
     unitNames: units.map((u) => u.name).slice(0, 8),
     traitNames: traits.slice(0, 6).map((x) => ({ name: x.trait.name, count: x.count, activeThreshold: x.activeThreshold, nextThreshold: x.nextThreshold, active: x.isActive })),
@@ -79,7 +82,7 @@ export function buildDigestContext(data, analysis, maxComps = 4) {
     intent: analysis?.intent || 'general',
     compFilter: analysis?.compFilter || null,
     matched: {},
-    rankingRule: 'SAP XEP THEO: avgPlace tang dan (thap = manh hon), roi theo so tran (count) giam dan. KHONG tu doi thu tu.',
+    rankingRule: 'Danh sách ĐÃ xếp hạng (avgPlace tăng dần = mạnh hơn, số trận giảm dần = đáng tin hơn). KHI GỢI Ý: giới thiệu ĐỦ các đội theo ĐÚNG thứ tự, dùng ĐÚNG tên (name), carry (carryName) và số liệu (avg/count) của từng đội.',
     chunks: comps.map((comp) => compSummary(repo, comp)),
     dataSummary: repo.getDataSummary(),
   }
@@ -192,7 +195,7 @@ export function retrieveContext(data, analysis, maxChunks = 5) {
 
   const selectedItems = itemIds.length
     ? itemIds.slice(0, 3)
-    : unique(units.flatMap((u) => (u.recommendedItems || []).map((x) => repo.getItem(x)).filter(Boolean))).slice(0, 3)
+    : unique(units.flatMap((u) => (Array.isArray(u.recommendedItems) ? u.recommendedItems : []).map((x) => repo.getItem(x)).filter(Boolean))).slice(0, 3)
   const selectedTraits = traitIds.length
     ? traitIds.slice(0, 2)
     : unique(units.flatMap((u) => (u.traitApiNames || []).map((id) => repo.getTrait(id)).filter(Boolean))).slice(0, 2)
@@ -212,7 +215,7 @@ export function retrieveContext(data, analysis, maxChunks = 5) {
       (t) => repo.getUnits().filter((u) => (u.traitApiNames || []).includes(t.apiName)),
     ))
     const recItems = unique(traitUnitList.flatMap(
-      (u) => (u.recommendedItems || []).map((x) => repo.getItem(x)).filter(Boolean),
+      (u) => (Array.isArray(u.recommendedItems) ? u.recommendedItems : []).map((x) => repo.getItem(x)).filter(Boolean),
     )).slice(0, 4)
     selectedItems.push(...recItems)
     traitUnitList.slice(0, 3).forEach((u) => chunks.push(unitSummary(repo, u)))
@@ -253,7 +256,7 @@ function saveCache(key, value) {
 // TRA LOI TRUC TIEP (RAG v2): cau tinh - khong goi Gemini, so lieu lay nguyen tu JSON.
 // Tra ve chuoi Markdown, hoac null neu khong chac chan (de Gemini xu ly).
 // ============================================================
-export function directAnswer(data, analysis, contextObject) {
+export function directAnswer(data, analysis, contextObject, memory = null) {
   if (!data || !analysis || !contextObject) return null
   const repo = getRepo(data)
   const n = analysis.normalized || ''
@@ -278,30 +281,26 @@ export function directAnswer(data, analysis, contextObject) {
   const trait = (analysis.entities?.traits || []).map((x) => repo.getTrait(x.apiName) || repo.getTrait(x.name)).find(Boolean)
   const augment = (analysis.entities?.augments || []).map((x) => repo.getAugment(x.apiName) || repo.getAugment(x.name)).find(Boolean)
 
-  // 0) Gợi ý đội hình: DANH SÁCH XẾP HẠNG TỪ JSON — luôn giống hệt mọi lần hỏi
-  const tokens = new Set((n || '').split(/\s+/).filter((tk) => tk.length >= 3))
-  const strongUnit = (analysis.entities?.units || []).some((x) => {
-    const u = repo.getUnit(x.apiName)
-    const nameNorm = u ? normalizeText(u.name) : ''
-    return [...tokens].some((tk) => nameNorm.includes(tk))
-  })
-  const compChunks = (contextObject.chunks || []).filter((c) => c.type === 'comp')
-  const wantsList = analysis.compFilter
-    ? compChunks.length > 0
-    : ((analysis.intent === 'comp_search' || analysis.intent === 'recommendation' || analysis.intent === 'economy')
-       && !strongUnit && compChunks.length > 0)
-  if (wantsList) {
-    const comps = compChunks
-    if (comps.length) {
-      const cf = analysis.compFilter || {}
-      const labels = { expensive: 'Exodia (nhiều tướng 4-5 vàng)', reroll: 'Reroll', fast: 'Fast', standard: 'Chuẩn' }
-      const label = labels[cf.kind] || 'mạnh nhất hiện tại'
-      const lines = comps.map((c, i) => {
+  // 0b) Follow-up: "đội này con nào carry?" — dữ liệu từ memory (đội đang bàn)
+  if (memory && memory.comp && memory.comp.carryName && /\b(carry|chinh luc|con nao|chinh la ai|ai carry)\b/.test(n)) {
+    return '**Carry chính của ' + memory.comp.name + ' là ' + memory.comp.carryName + '**. Trang bị và tiến trình chi tiết có ở trang chi tiết đội hình — hoặc hỏi "AHRI lên đồ gì" để mình gợi ý.'
+  }
+  // 0c) Hỏi về 1 tướng (không hỏi đồ): đọc ra các đội hình chứa tướng đó
+  if (unit && analysis.intent !== 'item_build' && !/(cam gi|dung gi|len do|item nao)/.test(n)) {
+    const related = rankComps(repo).filter(
+      (c) => (c.units_string || '').split(',').map((x) => x.trim()).some((id) => {
+        const u = repo.getUnit(id)
+        return u && u.apiName === unit.apiName
+      }),
+    ).slice(0, 3)
+    if (related.length) {
+      const lines = related.map((c, i) => {
+        const idn = getCompIdentity(c, repo)
         const avg = c.overall && c.overall.avg != null ? c.overall.avg : '?'
         const count = c.overall && c.overall.count != null ? Number(c.overall.count).toLocaleString('vi-VN') : '?'
-        return (i + 1) + '. **' + c.name + '** — carry **' + (c.carryName || c.carry || '?') + '** — avg ' + avg + ' · ' + count + ' trận'
+        return (i + 1) + '. **' + idn.title + '** — carry **' + (idn.carry && idn.carry.name ? idn.carry.name : '?') + '** — avg ' + avg + ' · ' + count + ' trận'
       })
-      return '**Top ' + comps.length + ' đội hình ' + label + '** (Set18, xếp theo avg place thấp = mạnh):\n' + lines.join('\n') + '\nHỏi tiếp tên đội hình để xem chi tiết.'
+      return '**' + unit.name + '** thường chơi trong các đội hình sau (Set18):\n' + lines.join('\n') + '\nHỏi tiếp tên đội hình để xem cách lên đồ và tiến trình.'
     }
   }
   // 1) Ghép đồ — composition nằm trong items_processed.json

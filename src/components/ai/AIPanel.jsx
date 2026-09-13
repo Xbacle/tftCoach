@@ -185,7 +185,7 @@ export default function AIPanel({ open, onClose }) {
 
     // RAG v2: câu tĩnh (ghép đồ / mốc tộc / đồ khuyên dùng / mô tả augment) —
     // trả lời THẲNG từ JSON, không gọi Gemini: số liệu luôn đúng và luôn giống nhau.
-    const direct = directAnswer(data, analysis, contextObject)
+    const direct = directAnswer(data, analysis, contextObject, memoryRef.current)
     if (direct) {
       cacheAnswer(answerKey, direct)
       setMessages((current) => [...current, {

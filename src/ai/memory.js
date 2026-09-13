@@ -21,9 +21,17 @@ export function updateMemory(analysis, contextObject) {
     if (comp?.carry) units.push(comp.carry)
   }
 
+  // Nhớ đội hình đang bàn (comp chunk đầu tiên trong context)
+  let comp = null
+  if (contextObject?.chunks) {
+    const c = contextObject.chunks.find((x) => x.type === 'comp')
+    if (c) comp = { id: c.id, name: c.name, carryName: c.carryName || c.carry || null }
+  }
+
   return {
     intent: analysis?.intent || 'general',
     compFilter: analysis?.compFilter || null,
+    comp,
     units: [...new Set(units)].slice(0, 3),
     items: [...new Set(items)].slice(0, 3),
     traits: [...new Set(traits)].slice(0, 2),
@@ -42,9 +50,18 @@ function looksLikeFollowUp(normalized) {
 export function mergeMemory(analysis, memory) {
   if (!memory || !analysis) return analysis
   const e = analysis.entities || {}
-  const hasEntity = Boolean(e.units?.length || e.items?.length || e.traits?.length || e.augments?.length)
-  const memoryHas = Boolean(memory.units?.length || memory.items?.length || memory.traits?.length || memory.augments?.length)
-  const needEntity = !hasEntity && looksLikeFollowUp(analysis.normalized) && memoryHas
+  // Entity chỉ "strong" khi tên (>= 4 ký tự) xuất hiện trong câu — fuzzy rác không chặn memory
+  const strongEntity = (list) => (list || []).some((x) => {
+    if (x.fromMemory) return true
+    const name = String(x.name || x.apiName || '').toLowerCase()
+    if (name.length < 4) return false
+    const n = analysis.normalized || ''
+    return n.includes(name) || name.split(/\s+/).some((w) => w.length >= 4 && n.includes(w))
+  })
+  const hasEntity = Boolean(strongEntity(e.units) || strongEntity(e.items) || strongEntity(e.traits) || strongEntity(e.augments))
+  const memoryHas = Boolean(memory.comp || memory.units?.length || memory.items?.length || memory.traits?.length || memory.augments?.length)
+  const carryQuestion = /\b(carry|chinh luc|con nao|chinh la ai|ai carry)\b/.test(analysis.normalized || '')
+  const needEntity = (!hasEntity && looksLikeFollowUp(analysis.normalized) && memoryHas) || (carryQuestion && memory.comp && !hasEntity)
   const inheritIntent = analysis.intent === 'general' && !analysis.mentionsTft && memory.intent && memory.intent !== 'general'
 
   if (!needEntity && !inheritIntent) return analysis
@@ -63,5 +80,6 @@ export function mergeMemory(analysis, memory) {
       traits: toEntity(memory.traits),
       augments: toEntity(memory.augments),
     } : e,
+    comp: memory.comp || null,
   }
 }
