@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTftData } from '../../services/dataLoader'
-import { searchChunks } from '../../ai/search.js'
 import { loadChat, saveChat } from '../../ai/chatStorage'
 import MarkdownText from './MarkdownText'
 
@@ -49,7 +48,6 @@ export default function AIPanel({ open, onClose }) {
   }, [messages, busy])
   useEffect(() => { if (open) setTimeout(() => document.querySelector('.ai-panel input')?.focus(), 120) }, [open])
 
-  const ragStore = data?.ragStore || null
   const topK = mode === 'm2' ? 6 : 3
   const modeInfo = MODES.find((m) => m.id === mode)
 
@@ -81,17 +79,17 @@ export default function AIPanel({ open, onClose }) {
         if (res.ok) { const j = await res.json(); searchQuery = j.question || message }
       }
 
-      // LỚP 2 — embed câu hỏi
-      const embedRes = await fetch('/api/embed', {
+      // LỚP 2 — tìm kiếm ngữ nghĩa Top-K (server-side: embed + cosine)
+      const searchRes = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: searchQuery }),
+        body: JSON.stringify({ text: searchQuery, topK }),
       })
-      if (!embedRes.ok) throw new Error(`Embed lỗi (${embedRes.status})`)
-      const { vector } = await embedRes.json()
-
-      // LỚP 2 — cosine search Top-K
-      const hits = searchChunks(ragStore, vector, searchQuery, topK)
+      if (!searchRes.ok) {
+        const j = await searchRes.json().catch(() => ({}))
+        throw new Error(j.error || `Tìm kiếm lỗi (${searchRes.status})`)
+      }
+      const { chunks: hits } = await searchRes.json()
       const context = hits.map((h) => h.text).join('\n---\n')
 
       // LỐP 3 — Gemini trình bày

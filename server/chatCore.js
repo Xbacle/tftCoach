@@ -347,6 +347,7 @@ export async function embedText(text) {
 
 // Mode 2 — Query rewriting: dùng lịch sử viết lại câu teencode/follow-up thành câu chuẩn
 export async function rewriteQuery({ message, history = [] }) {
+  if (!Array.isArray(history) || history.length === 0) return message;
   const key = process.env.GEMINI_API_KEY;
   if (!key)
     throw createApiError("Server chưa cấu hình GEMINI_API_KEY.", 500);

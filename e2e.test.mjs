@@ -1,39 +1,38 @@
-import { searchChunks } from './src/ai/search.js'
 import fs from 'node:fs'
-
-const data = {
-  set18: JSON.parse(fs.readFileSync('public/data/Set18.json', 'utf8')),
-  comps: JSON.parse(fs.readFileSync('public/data/comps.json', 'utf8')),
-  processed: JSON.parse(fs.readFileSync('public/data/items_processed.json', 'utf8')),
-  assets: {},
-  glossary: JSON.parse(fs.readFileSync('public/data/glossary.json', 'utf8')),
+const BASE = 'http://localhost:8787'
+async function post(path, body) {
+  const res = await fetch(BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  return { status: res.status, json: await res.json().catch(() => ({})) }
 }
-const env = fs.readFileSync('.env.local', 'utf8')
-const key = env.split(/\r?\n/).find((l) => l.startsWith('GEMINI_API_KEY=')).slice('GEMINI_API_KEY='.length).trim()
-
-async function embed(text) {
-  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-    body: JSON.stringify({ model: 'models/gemini-embedding-2', content: { parts: [{ text }] }, outputDimensionality: 1536 }),
-  })
-  if (!res.ok) throw new Error('embed ' + res.status)
-  return (await res.json()).embedding.values
+async function stream(path, body) {
+  const res = await fetch(BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const reader = res.body.getReader()
+  const dec = new TextDecoder()
+  let full = ''
+  for (;;) {
+    const r = await reader.read()
+    if (r.done) break
+    for (const line of dec.decode(r.value, { stream: true }).split('\n')) {
+      if (!line.startsWith('data:')) continue
+      try { const e = JSON.parse(line.slice(5).trim()); if (e.delta) full += e.delta; if (e.error) full += 'LỖI: ' + e.error } catch {}
+    }
+  }
+  return { status: res.status, text: full }
 }
 
-const queries = ['casopia cầm gì', 'exodia', 'tộc fae mốc kích hoạt', 'đội hình reroll mạnh nhất']
-for (const q of queries) {
-  const vector = await embed(q)
-  const hits = searchChunks({ chunks: [] }, vector, q, 3) // placeholder — cần store thật
-  console.log('Q:', q)
-  for (const h of hits) console.log('   →', h.type + ':', h.text.slice(0, 70))
+const cases = [
+  ['casopia cầm gì', 'm1'],
+  ['cho em hỏi về đội hình exodia', 'm2'],
+  ['đội hình này con nào carry', 'm2'],
+  ['hello', 'm1'],
+]
+for (const [q, m] of cases) {
+  const rw = m === 'm2' ? (await post('/api/rewrite', { message: q, history: [] })).json.question : q
+  const s = await post('/api/search', { text: rw, topK: m === 'm2' ? 6 : 3 })
+  const chunks = s.json.chunks || []
+  const chat = await stream('/api/chat/stream', { message: q, context: chunks.map((c) => c.text).join('\n---\n'), history: [], mode: m })
+  console.log(`[${m}] Q: ${q}`)
+  console.log(`   rewrite: ${rw} | search: ${chunks.length} chunk | HTTP ${chat.status}`)
+  console.log('   AI:', chat.text.slice(0, 130).replace(/\n/g, ' '))
   console.log()
-}
-const store = JSON.parse(fs.readFileSync('public/data/rag_store.json', 'utf8'))
-console.log('store chunks:', store.chunks.length)
-for (const q of queries) {
-  const vector = await embed(q)
-  const hits = searchChunks(store, vector, q, 2)
-  console.log('Q:', q)
-  hits.forEach(h => console.log('   →', h.type + ':', h.text.slice(0, 70)))
 }

@@ -91,12 +91,44 @@ for (const e of data.set18.encounters || []) {
   add('encounter:' + e.apiName, 'encounter', `Gặp gỡ ${e.name}: ${String(e.desc || '').slice(0, 160)}`)
 }
 
+// ---- Gắn thuật ngữ cộng đồng (từ glossary.json) vào chunk text ----
+// Đây là cơ chế "train": thêm 1 mục vào glossary.json -> chạy lại script -> AI nhận diện được thuật ngữ mới.
+try {
+  const gl = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/glossary.json'), 'utf8'))
+  for (const term of gl.communityTerms || []) {
+    const cf = term.compFilter || {}
+    if (cf.kind === 'expensive') {
+      // gắn nhãn cho 3 đội tổng vàng cao nhất
+      const ranked = [...repo.getComps()].sort((a, b) => {
+        const g = (x) => (x.units_string || '').split(',').reduce((t, id) => { const u = repo.getUnit(id.trim()); return t + (u ? Number(u.cost) || 0 : 0) }, 0)
+        return g(b) - g(a)
+      }).slice(0, 3)
+      for (const c of ranked) {
+        const ch = chunks.find((x) => x.id === 'comp:' + c.Cluster)
+        if (ch && !ch.text.includes(term.pattern)) ch.text += ` (cộng đồng gọi là đội hình ${term.pattern}.)`
+      }
+    }
+    if (cf.kind === 'levelling') {
+      const m = String(cf.match || '').toLowerCase()
+      for (const c of chunks) {
+        if (c.type === 'comp' && (c.text.includes('Level ' + m) || (c.text.match(new RegExp('\(' + m, 'i')))) && !c.text.includes(term.pattern)) {
+          c.text += ` (cộng đồng gọi là ${term.pattern}.)`
+        }
+      }
+    }
+  }
+  console.log('Đã gắn thuật ngữ cộng đồng từ glossary vào chunk')
+} catch (e) { console.log('glossary skip:', e.message) }
+
 // ---- RESUMABLE store ----
 const store = fs.existsSync(STORE_PATH)
   ? JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'))
   : { model: EMBED_MODEL, dim: DIM, chunks: [] }
-const embeddedIds = new Set(store.chunks.map((c) => c.id))
-const pending = chunks.filter((c) => !embeddedIds.has(c.id))
+const oldById = new Map(store.chunks.map((c) => [c.id, c]))
+const pending = chunks.filter((c) => {
+  const old = oldById.get(c.id)
+  return !old || old.text !== c.text
+})
 
 console.log(`Tổng ${chunks.length} chunk — cần embed: ${pending.length} (đã có ${store.chunks.length} trong store)`)
 if (!pending.length) { console.log('✅ Hoàn tất từ trước.'); process.exit(0) }
@@ -132,7 +164,9 @@ async function worker() {
     if (stopped) return
     const vector = await embedOne(c.text)
     if (vector === null) { stopped = true; console.log('⚠️ Dừng mềm — chạy lại script để tiếp tục.'); return }
-    store.chunks.push({ id: c.id, type: c.type, text: c.text, vector })
+    const oldIdx = store.chunks.findIndex((x) => x.id === c.id)
+    if (oldIdx !== -1) store.chunks[oldIdx] = { id: c.id, type: c.type, text: c.text, vector }
+    else store.chunks.push({ id: c.id, type: c.type, text: c.text, vector })
     done++
     if (done % 20 === 0) {
       fs.writeFileSync(STORE_PATH, JSON.stringify(store))

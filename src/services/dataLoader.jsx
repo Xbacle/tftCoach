@@ -23,9 +23,8 @@ export async function loadAllTftData() {
     fetchJson('/data/items_processed.json'),
     fetchOptionalJson('/data/assets.json', {}),
     fetchOptionalJson('/data/glossary.json', null),
-    fetchOptionalJson('/data/rag_store.json', null),
   ])
-  return { set18, comps, processed, assets, glossary, ragStore }
+  return { set18, comps, processed, assets, glossary }
 }
 
 export function DataProvider({ children }) {
