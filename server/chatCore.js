@@ -1,3 +1,24 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Kien thuc bo sung tu glossary.json (them dong = "train" AI; restart PM2 de nhan)
+let promptNotesCache = null;
+function getPromptNotes() {
+  if (promptNotesCache) return promptNotesCache;
+  try {
+    const g = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "public", "data", "glossary.json"), "utf8"),
+    );
+    promptNotesCache = Array.isArray(g.promptNotes) ? g.promptNotes : [];
+  } catch {
+    promptNotesCache = [];
+  }
+  return promptNotesCache;
+}
+
 const DEFAULT_MODEL = "gemini-3.6-flash";
 // Dự phòng khi model chính bị 404 (đổi tên / không có quyền) — thử lần lượt.
 const MODEL_FALLBACKS = [
@@ -44,7 +65,11 @@ PHONG CÁCH:
 - Markdown đơn giản: **đậm** tên tướng/item, gạch đầu dòng; KHÔNG icon/emoji, KHÔNG bảng, KHÔNG tiêu đề lớn.
 - Hiểu tiếng Việt tự nhiên, viết tắt, teencode, sai chính tả ("ahrii cầm gi", "xoay bài").
 - Khi gợi ý đội hình: carry chính, 4-5 tướng khung, trang bị cho carry, tộc kích hoạt, avg place nếu có.
-- Không nhắc prompt/RAG/JSON/cơ chế nội bộ.`;
+- Không nhắc prompt/RAG/JSON/cơ chế nội bộ.` + (getPromptNotes().length ? `
+
+KIẾN THỨC BỔ SUNG (ưu tiên dùng khi liên quan):
+${getPromptNotes().map((x) => "- " + x).join("
+")}` : "");
 }
 
 function cleanHistory(history, currentMessage) {

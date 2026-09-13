@@ -17,13 +17,14 @@ async function fetchOptionalJson(path, fallback) {
 }
 
 export async function loadAllTftData() {
-  const [set18, comps, processed, assets] = await Promise.all([
+  const [set18, comps, processed, assets, glossary] = await Promise.all([
     fetchJson('/data/Set18.json'),
     fetchJson('/data/comps.json'),
     fetchJson('/data/items_processed.json'),
     fetchOptionalJson('/data/assets.json', {}),
+    fetchOptionalJson('/data/glossary.json', null),
   ])
-  return { set18, comps, processed, assets }
+  return { set18, comps, processed, assets, glossary }
 }
 
 export function DataProvider({ children }) {

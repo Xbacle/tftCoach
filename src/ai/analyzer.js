@@ -26,22 +26,6 @@ const STOP_TOKENS = new Set([
   'no', 'nay', 'cua', 'do day', 'nho',
 ])
 
-const ALIASES = new Map([
-  // tướng — sửa typo
-  ['ahry', 'ahri'], ['ahrii', 'ahri'], ['ari', 'ahri'], ['a hri', 'ahri'],
-  ['xayahh', 'xayah'], ['camli', 'camille'], ['camile', 'camille'], ['florra', 'fiora'],
-  ['sylass', 'sylas'],
-  // item — viết tắt cộng đồng
-  ['bb', 'blue buff'], ['jg', 'jeweled gauntlet'], ['ie', 'infinity edge'],
-  ['gs', 'giant slayer'], ['hoj', 'hand of justice'], ['lw', 'last whisper'],
-  ['rfc', 'rapid firecannon'], ['dc', 'rabadon'], ['shojin', 'shojin'],
-  ['sojin', 'shojin'], ['warmog', 'warmog'], ['red', 'red buff'], ['blue', 'blue buff'],
-  // tên gọi tiếng Việt thông dụng
-  ['nuoc xanh', 'blue buff'], ['nuoc trang', 'blue buff'],
-  ['gang bao thach', 'gargoyle stoneplate'], ['vo cuc', 'guinsoo'],
-  ['kiem vo cuc', 'guinsoo'], ['gang tay ngoc', 'jeweled gauntlet'],
-  ['day chuyen', 'shojin'], ['vo tay', 'shojin'],
-])
 
 const ANALYZER_CACHE = new WeakMap()
 
@@ -78,17 +62,17 @@ function getIndexes(data) {
   return indexes
 }
 
-function searchEntity(fuse, rawText, limit) {
+function searchEntity(fuse, rawText, limit, aliasList = []) {
   let normalized = normalizeText(rawText)
   // thay alias dạng cụm (nhiều chữ) trước, rồi mới đến từng token
-  for (const [alias, full] of ALIASES) {
+  for (const { from: alias, to: full } of aliasList) {
     if (alias.includes(' ') && normalized.includes(alias)) normalized = normalized.replaceAll(alias, full)
   }
   const terms = [...new Set([normalized, ...tokenize(normalized)])]
     .filter((x) => x.length >= 2 && !STOP_TOKENS.has(x))
   const hits = []
   for (const term of terms) {
-    const alias = ALIASES.get(term) || term
+    const alias = aliasList.find((a) => a.from === term)?.to || term
     for (const hit of fuse.search(alias).slice(0, limit)) {
       if ((hit.score ?? 1) <= 0.44) hits.push({ value: hit.item, score: hit.score ?? 1 })
     }
@@ -118,6 +102,7 @@ function intentFromQuery(text) {
 }
 
 import { mergeMemory } from './memory'
+import { getGlossary, getAliasList, getCommunityTerms } from './glossary'
 
 export function analyzeQuery(data, message, history = [], memory = null) {
   if (!data) return { intent: 'general', normalized: normalizeText(message), query: message, entities: {} }
@@ -126,12 +111,13 @@ export function analyzeQuery(data, message, history = [], memory = null) {
     ? history.filter((m) => m?.role === 'user').slice(-2).map((m) => String(m.content || '')).join(' ')
     : ''
   const expanded = `${recentUserText} ${message}`.trim()
+  const aliasList = getAliasList(getGlossary(data))
   const intent = intentFromQuery(message)
   const found = {
-    units: searchEntity(units, expanded, 5),
-    items: searchEntity(items, expanded, 4),
-    traits: searchEntity(traits, expanded, 3),
-    augments: searchEntity(augments, expanded, 3),
+    units: searchEntity(units, expanded, 5, aliasList),
+    items: searchEntity(items, expanded, 4, aliasList),
+    traits: searchEntity(traits, expanded, 3, aliasList),
+    augments: searchEntity(augments, expanded, 3, aliasList),
   }
   const normalized = normalizeText(message)
   // Với câu không có từ khóa intent: chỉ tin rằng "đang hỏi TFT" khi tên một thực thể
@@ -142,8 +128,11 @@ export function analyzeQuery(data, message, history = [], memory = null) {
   })
   // Khớp mờ CHẮC CHẮN (score thấp): "warmog" -> "Warmogs Armor" vẫn tính là hỏi game
   const scores = [...found.units, ...found.items, ...found.traits, ...found.augments].map((x) => x.score)
+  const community = getCommunityTerms(getGlossary(data)).find((t) => t.re.test(normalized))
+
   const bestScore = scores.length ? Math.min(...scores) : 1
   const mentionsTft = intent !== 'general'
+    || Boolean(community)
     || namesEntity(found.units) || namesEntity(found.items) || namesEntity(found.traits) || namesEntity(found.augments)
     || bestScore <= 0.15
     || /tft|set 18|dtcl|dau truong chan ly/.test(normalized)
@@ -153,6 +142,8 @@ export function analyzeQuery(data, message, history = [], memory = null) {
     mentionsTft,
     normalized,
     query: message,
+    compFilter: community ? community.compFilter : null,
+    communityExplain: community ? community.explain : null,
     entities: {
       units: found.units.map((x) => ({ name: x.value.name, apiName: x.value.apiName, score: x.score })),
       items: found.items.map((x) => ({ name: x.value.name, apiName: x.value.apiName, score: x.score })),

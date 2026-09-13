@@ -23,6 +23,7 @@ export function updateMemory(analysis, contextObject) {
 
   return {
     intent: analysis?.intent || 'general',
+    compFilter: analysis?.compFilter || null,
     units: [...new Set(units)].slice(0, 3),
     items: [...new Set(items)].slice(0, 3),
     traits: [...new Set(traits)].slice(0, 2),
@@ -54,6 +55,7 @@ export function mergeMemory(analysis, memory) {
   return {
     ...analysis,
     intent: inheritIntent ? memory.intent : analysis.intent,
+    compFilter: analysis.compFilter ?? memory.compFilter ?? null,
     mentionsTft: analysis.mentionsTft || needEntity,
     entities: needEntity ? {
       units: toEntity(memory.units),

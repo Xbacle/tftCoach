@@ -170,7 +170,7 @@ export default function AIPanel({ open, onClose }) {
       setMessages((current) => [...current, {
         id: ++idRef.current,
         role: 'assistant',
-        content: 'Chào bạn 👋 Mình là **TFT Coach**. Cứ hỏi thẳng về tướng, item, tộc hệ, đội hình hoặc cách xoay bài nhé!',
+        content: (data?.glossary?.phrases?.greeting) || 'Chào bạn 👋 Mình là **TFT Coach**. Cứ hỏi thẳng về tướng, item, tộc hệ, đội hình hoặc cách xoay bài nhé!',
         meta: { local: true },
       }])
       setBusy(false)

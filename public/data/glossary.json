@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "_hướng_dẫn": "File này là 'kiến thức' của AI Coach. Thêm/sửa mục dưới đây rồi F5 trang web là AI nhận diện được ngay — không cần sửa code. aliases: teencode/viết tắt -> tên chuẩn. communityTerms: thuật ngữ cộng đồng -> bộ lọc đội hình (kind: expensive | levelling+match | standard). faq: mẫu câu -> trả lời trực tiếp từ JSON. phrases: giọng nói của chat. promptNotes: kiến thức thêm vào bộ não Gemini.",
+
+  "aliases": [
+    { "from": "ahry", "to": "ahri" },
+    { "from": "ahrii", "to": "ahri" },
+    { "from": "ari", "to": "ahri" },
+    { "from": "a hri", "to": "ahri" },
+    { "from": "xayahh", "to": "xayah" },
+    { "from": "camli", "to": "camille" },
+    { "from": "camile", "to": "camille" },
+    { "from": "florra", "to": "fiora" },
+    { "from": "sylass", "to": "sylas" },
+    { "from": "sojin", "to": "shojin" },
+    { "from": "sôjin", "to": "shojin" },
+    { "from": "gnh", "to": "gargoyle stoneplate" },
+    { "from": "gang bao thach", "to": "gargoyle stoneplate" },
+    { "from": "vo cuc", "to": "guinsoo" },
+    { "from": "vô cực", "to": "guinsoo" },
+    { "from": "kiem vo cuc", "to": "guinsoo" },
+    { "from": "bb", "to": "blue buff" },
+    { "from": "blue", "to": "blue buff" },
+    { "from": "nuoc xanh", "to": "blue buff" },
+    { "from": "nuoc trang", "to": "blue buff" },
+    { "from": "jg", "to": "jeweled gauntlet" },
+    { "from": "gang tay ngoc", "to": "jeweled gauntlet" },
+    { "from": "ie", "to": "infinity edge" },
+    { "from": "gs", "to": "giant slayer" },
+    { "from": "hoj", "to": "hand of justice" },
+    { "from": "lw", "to": "last whisper" },
+    { "from": "rfc", "to": "rapid firecannon" },
+    { "from": "red", "to": "red buff" },
+    { "from": "warmog", "to": "warmog" },
+    { "from": "day chuyen", "to": "shojin" },
+    { "from": "vo tay", "to": "shojin" },
+    { "from": "tdk", "to": "titan" }
+  ],
+
+  "communityTerms": [
+    {
+      "pattern": "exodia",
+      "compFilter": { "kind": "expensive" },
+      "explain": "Exodia = tên cộng đồng chỉ đội hình nhiều tướng 4-5 vàng (đắt tiền, hiếm)."
+    },
+    {
+      "pattern": "reroll",
+      "compFilter": { "kind": "levelling", "match": "lvl" },
+      "explain": "Reroll = đội hình roll tại cấp thấp (lvl 5-7) để nâng tướng chính lên 3 sao."
+    },
+    {
+      "pattern": "slow roll",
+      "compFilter": { "kind": "levelling", "match": "lvl" },
+      "explain": "Slow roll = giữ 50 vàng, roll từ từ tại cấp thấp để nâng tướng chính 3 sao."
+    },
+    {
+      "pattern": "fast 8",
+      "compFilter": { "kind": "levelling", "match": "Fast" },
+      "explain": "Fast 8 = tích tiền lên cấp 8 thật nhanh để chơi tướng đắt."
+    },
+    {
+      "pattern": "fast 9",
+      "compFilter": { "kind": "levelling", "match": "Fast" },
+      "explain": "Fast 9 = lên cấp 9 sớm nhất có thể."
+    },
+    {
+      "pattern": "standard",
+      "compFilter": { "kind": "levelling", "match": "Standard" },
+      "explain": "Standard = tiến trình lên cấp tiêu chuẩn theo tiền lãi."
+    }
+  ],
+
+  "faq": [
+    { "match": ["ghép", "công thức", "recipe", "làm từ", "từ những gì"], "requiresEntity": "item", "template": "recipe" },
+    { "match": ["mốc", "kích hoạt", "bao nhiêu tướng"], "requiresEntity": "trait", "template": "trait" },
+    { "match": ["cầm", "dùng", "lên đồ", "item nào"], "requiresEntity": "unit", "template": "unitItems" },
+    { "match": ["augment", "tăng cường"], "requiresEntity": "augment", "template": "augment" }
+  ],
+
+  "phrases": {
+    "greeting": "Chào bạn 👋 Mình là **TFT Coach**. Cứ hỏi thẳng về tướng, item, tộc hệ, đội hình hoặc cách xoay bài nhé!",
+    "refusal": "Mình chỉ hỗ trợ các câu hỏi về Đấu Trường Chân Lý. Bạn cứ hỏi về tướng, đội hình, trang bị nhé!",
+    "noData": "Không có dữ liệu trong Set18 của TFTCoach.",
+    "sourceNote": "(theo dữ liệu Set18)"
+  },
+
+  "promptNotes": [
+    "Exodia là tên cộng đồng chỉ đội hình nhiều tướng 4-5 vàng (đắt tiền, hiếm). Người dùng nhắc exodia -> giới thiệu các đội hình nhiều tướng 4-5 vàng trong dữ liệu.",
+    "Reroll = đội hình roll tại cấp thấp (lvl 5-7) nâng tướng chính 3 sao. Slow roll = giữ 50 vàng roll từ từ.",
+    "Fast 8 / Fast 9 = lên cấp thật nhanh để chơi tướng đắt tiền.",
+    "Trả lời NGẮN (khoảng dưới 150 từ), kết luận trước, giải thích sau. Cùng câu hỏi + cùng dữ liệu = cùng kết luận và cùng thứ tự gợi ý.",
+    "Danh sách đội hình trong RETRIEVED DATA đã xếp hạng sẵn: avg place THẤP = mạnh hơn; bằng nhau thì số trận NHIỀU hơn đáng tin hơn. Hỏi đội hình mạnh nhất -> chọn đội đứng đầu danh sách."
+  ]
+}

@@ -61,7 +61,7 @@ function compSummary(repo, comp) {
     || null
   return {
     type: 'comp', id: comp.Cluster, name: comp.name_string || comp.name || `Comp ${comp.Cluster}`,
-    carry,
+    carry, carryName: (carry && repo.getUnit(carry) ? repo.getUnit(carry).name : carry) || null,
     unitNames: units.map((u) => u.name).slice(0, 8),
     traitNames: traits.slice(0, 6).map((x) => ({ name: x.trait.name, count: x.count, activeThreshold: x.activeThreshold, nextThreshold: x.nextThreshold, active: x.isActive })),
     overall: comp.overall, difficulty: comp.difficulty, levelling: comp.levelling,
@@ -73,10 +73,11 @@ function compSummary(repo, comp) {
 // gửi "digest" tổng quan (top đội hình mạnh) để AI vẫn có dữ liệu gốc để trả lời.
 export function buildDigestContext(data, analysis, maxComps = 4) {
   const repo = getRepo(data)
-  const comps = rankComps(repo).slice(0, maxComps)
+  const comps = applyCompFilter(rankComps(repo), analysis?.compFilter, repo).slice(0, maxComps)
   return {
     source: 'local-json-digest',
     intent: analysis?.intent || 'general',
+    compFilter: analysis?.compFilter || null,
     matched: {},
     rankingRule: 'SAP XEP THEO: avgPlace tang dan (thap = manh hon), roi theo so tran (count) giam dan. KHONG tu doi thu tu.',
     chunks: comps.map((comp) => compSummary(repo, comp)),
@@ -86,6 +87,30 @@ export function buildDigestContext(data, analysis, maxComps = 4) {
 
 // Xep hang doi hinh chuan (RAG v2): vi tri trung binh thap hon = manh;
 // bang nhau thi nhieu tran hon = dang tin hon; cung luc do thi theo Cluster (on dinh 100%).
+// Gia vang doi hinh = tong gia cac tuong (bo loc "exodia")
+function compGold(repo, comp) {
+  return (comp.units_string || '').split(',').reduce((sum, id) => {
+    const u = repo.getUnit(id.trim())
+    return sum + (u ? Number(u.cost) || 0 : 0)
+  }, 0)
+}
+
+// Loc doi hinh theo compFilter khai bao trong glossary.json
+function applyCompFilter(comps, compFilter, repo) {
+  if (!compFilter || !compFilter.kind) return comps
+  if (compFilter.kind === 'expensive') {
+    return [...comps].sort((a, b) => compGold(repo, b) - compGold(repo, a))
+  }
+  if (compFilter.kind === 'levelling') {
+    const m = String(compFilter.match || '').toLowerCase()
+    return comps.filter((c) => (c.levelling || '').toLowerCase().includes(m))
+  }
+  if (compFilter.kind === 'standard') {
+    return comps.filter((c) => /standard/i.test(c.levelling || ''))
+  }
+  return comps
+}
+
 export function rankComps(repo) {
   return repo.getComps()
     .map((comp) => ({ comp, avg: Number(comp?.overall?.avg) || 99, count: Number(comp?.overall?.count) || 0 }))
@@ -124,6 +149,21 @@ export function retrieveContext(data, analysis, maxChunks = 5) {
   const itemIds = (analysis.entities?.items || []).map((x) => repo.getItem(x.apiName) || repo.getItem(x.name)).filter(Boolean)
   const traitIds = (analysis.entities?.traits || []).map((x) => repo.getTrait(x.apiName) || repo.getTrait(x.name)).filter(Boolean)
   const augmentIds = (analysis.entities?.augments || []).map((x) => repo.getAugment(x.apiName) || repo.getAugment(x.name)).filter(Boolean)
+  // RAG v2.1: thuat ngu cong dong (exodia/reroll/fast...) la yeu cau DANH SACH ro rang ->
+  // vao thang bang loc, bo qua fuzzy match rac cua cac tu con lai trong cau.
+  if (analysis.compFilter) {
+    const tokens = (analysis.normalized || '').split(/\s+/).filter((tk) => tk.length >= 3)
+    const strongUnit = (analysis.entities?.units || []).some((x) => {
+      const u = repo.getUnit(x.apiName)
+      const nameNorm = u ? normalizeText(u.name) : ''
+      return [...tokens].some((tk) => nameNorm.includes(tk))
+    })
+    if (!strongUnit) {
+      const d = buildDigestContext(data, analysis)
+      saveCache(cacheKey, d)
+      return d
+    }
+  }
   // RAG v2: hoi doi hinh/kinh te ma KHONG nhac thuc the cu the -> dung bang xep hang
   // (avg place thap nhat + nhieu tran nhat), tranh fuzzy bat rac lam lech thu tu.
   if (
@@ -238,6 +278,32 @@ export function directAnswer(data, analysis, contextObject) {
   const trait = (analysis.entities?.traits || []).map((x) => repo.getTrait(x.apiName) || repo.getTrait(x.name)).find(Boolean)
   const augment = (analysis.entities?.augments || []).map((x) => repo.getAugment(x.apiName) || repo.getAugment(x.name)).find(Boolean)
 
+  // 0) Gợi ý đội hình: DANH SÁCH XẾP HẠNG TỪ JSON — luôn giống hệt mọi lần hỏi
+  const tokens = new Set((n || '').split(/\s+/).filter((tk) => tk.length >= 3))
+  const strongUnit = (analysis.entities?.units || []).some((x) => {
+    const u = repo.getUnit(x.apiName)
+    const nameNorm = u ? normalizeText(u.name) : ''
+    return [...tokens].some((tk) => nameNorm.includes(tk))
+  })
+  const compChunks = (contextObject.chunks || []).filter((c) => c.type === 'comp')
+  const wantsList = analysis.compFilter
+    ? compChunks.length > 0
+    : ((analysis.intent === 'comp_search' || analysis.intent === 'recommendation' || analysis.intent === 'economy')
+       && !strongUnit && compChunks.length > 0)
+  if (wantsList) {
+    const comps = compChunks
+    if (comps.length) {
+      const cf = analysis.compFilter || {}
+      const labels = { expensive: 'Exodia (nhiều tướng 4-5 vàng)', reroll: 'Reroll', fast: 'Fast', standard: 'Chuẩn' }
+      const label = labels[cf.kind] || 'mạnh nhất hiện tại'
+      const lines = comps.map((c, i) => {
+        const avg = c.overall && c.overall.avg != null ? c.overall.avg : '?'
+        const count = c.overall && c.overall.count != null ? Number(c.overall.count).toLocaleString('vi-VN') : '?'
+        return (i + 1) + '. **' + c.name + '** — carry **' + (c.carryName || c.carry || '?') + '** — avg ' + avg + ' · ' + count + ' trận'
+      })
+      return '**Top ' + comps.length + ' đội hình ' + label + '** (Set18, xếp theo avg place thấp = mạnh):\n' + lines.join('\n') + '\nHỏi tiếp tên đội hình để xem chi tiết.'
+    }
+  }
   // 1) Ghép đồ — composition nằm trong items_processed.json
   if (item && /(ghep|cong thuc|recipe|lam tu|tu nhung gi)/.test(n)) {
     const processedItems = (data.processed && data.processed.itemNames) || {}
@@ -258,11 +324,12 @@ export function directAnswer(data, analysis, contextObject) {
   }
   // 3) Do khuyen dung cho tuong
   if (unit && (analysis.intent === 'item_build' || /(cam gi|dung gi|len do|item nao)/.test(n))) {
-    const rec = (unit.recommendedItems || []).slice(0, 3)
-      .map((x) => (typeof x === 'string' ? (repo.getItem(x) ? repo.getItem(x).name : x) : (x ? x.name : null))).filter(Boolean)
-    const perfItems = (repo.getUnitStats(unit) ? repo.getUnitStats(unit).items || [] : []).slice(0, 3)
-      .map((x) => { const it = repo.getItem(x.unit || x.item || x.apiName); return it ? it.name : null }).filter(Boolean)
-    const list = [...new Set([...rec, ...perfItems])].slice(0, 3)
+    const stats = repo.getUnitStats(unit)
+    const perfItems = (stats ? stats.items || [] : []).slice(0, 3)
+      .map((x) => { const it = repo.getItem(x.itemName || x.apiName); return it ? it.name : null }).filter(Boolean)
+    const rec = (unit.recommendedItems || []).filter((x) => typeof x === 'string' && repo.getItem(x))
+      .map((x) => repo.getItem(x).name).filter(Boolean)
+    const list = [...new Set([...perfItems, ...rec])].slice(0, 3)
     if (list.length) return '**' + unit.name + '** (' + unit.cost + '-cost) thuong dung: **' + list.join('**, **') + '** _(theo du lieu Set18)_'
   }
   // 4) Augment mo ta
